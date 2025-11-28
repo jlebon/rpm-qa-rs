@@ -238,6 +238,8 @@ mod tests {
         assert_eq!(packages["bash"].epoch, None);
         // shadow-utils has epoch 2
         assert_eq!(packages["shadow-utils"].epoch, Some(2));
+        // perl-POSIX has explicit epoch 0
+        assert_eq!(packages["perl-POSIX"].epoch, Some(0));
     }
 
     #[test]
