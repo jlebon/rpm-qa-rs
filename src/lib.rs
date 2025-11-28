@@ -6,7 +6,7 @@
 
 mod raw;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::Path;
@@ -194,7 +194,8 @@ pub fn load_from_rootfs(rootfs: &Path) -> Result<Packages> {
         .args(["--root"])
         .arg(rootfs)
         .args(["-qa", "--json"])
-        .output()?;
+        .output()
+        .context("failed to run rpm")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

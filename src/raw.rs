@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Deserializer;
 use std::io::Read;
@@ -108,44 +108,92 @@ impl TryFrom<RawPackage> for Package {
             let basename = &raw.basenames[i];
             let path = format!("{}{}", dirname, basename);
 
-            // Build digest if present and non-empty
-            let digest = raw.filedigests.get(i).and_then(|hex| {
-                if hex.is_empty() {
-                    None
-                } else {
-                    digest_algo.map(|algorithm| FileDigest {
-                        algorithm,
-                        hex: hex.clone(),
-                    })
-                }
-            });
+            let size = *raw.filesizes.get(i).ok_or_else(|| {
+                anyhow::anyhow!("{}: missing filesize for {} (index {})", raw.name, path, i)
+            })?;
+            let mode = *raw.filemodes.get(i).ok_or_else(|| {
+                anyhow::anyhow!("{}: missing filemode for {} (index {})", raw.name, path, i)
+            })?;
+            let mtime = *raw.filemtimes.get(i).ok_or_else(|| {
+                anyhow::anyhow!("{}: missing filemtime for {} (index {})", raw.name, path, i)
+            })?;
+            let flags = *raw.fileflags.get(i).ok_or_else(|| {
+                anyhow::anyhow!("{}: missing fileflags for {} (index {})", raw.name, path, i)
+            })?;
+            let user = raw.fileusername.get(i).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: missing fileusername for {} (index {})",
+                    raw.name,
+                    path,
+                    i
+                )
+            })?;
+            let group = raw.filegroupname.get(i).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: missing filegroupname for {} (index {})",
+                    raw.name,
+                    path,
+                    i
+                )
+            })?;
+            let filedigest = raw.filedigests.get(i).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: missing filedigest for {} (index {})",
+                    raw.name,
+                    path,
+                    i
+                )
+            })?;
+            let linkto = raw.filelinktos.get(i).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: missing filelinkto for {} (index {})",
+                    raw.name,
+                    path,
+                    i
+                )
+            })?;
 
-            // Build linkto if present and non-empty
-            let linkto = raw
-                .filelinktos
-                .get(i)
-                .and_then(|s| if s.is_empty() { None } else { Some(s.clone()) });
+            // Build digest if non-empty
+            let digest = if filedigest.is_empty() {
+                None
+            } else {
+                digest_algo.map(|algorithm| FileDigest {
+                    algorithm,
+                    hex: filedigest.clone(),
+                })
+            };
+
+            // Build linkto if non-empty
+            let linkto = if linkto.is_empty() {
+                None
+            } else {
+                Some(linkto.clone())
+            };
 
             let info = FileInfo {
-                size: raw.filesizes.get(i).copied().unwrap_or(0),
-                mode: raw.filemodes.get(i).copied().unwrap_or(0),
-                mtime: raw.filemtimes.get(i).copied().unwrap_or(0),
+                size,
+                mode,
+                mtime,
                 digest,
-                flags: FileFlags::from_raw(raw.fileflags.get(i).copied().unwrap_or(0)),
-                user: raw.fileusername.get(i).cloned().unwrap_or_default(),
-                group: raw.filegroupname.get(i).cloned().unwrap_or_default(),
+                flags: FileFlags::from_raw(flags),
+                user: user.clone(),
+                group: group.clone(),
                 linkto,
             };
 
             files.insert(path, info);
         }
 
+        let arch = raw
+            .arch
+            .ok_or_else(|| anyhow::anyhow!("{}: missing arch", raw.name))?;
+
         Ok(Package {
             name: raw.name,
             version: raw.version,
             release: raw.release,
             epoch: raw.epoch,
-            arch: raw.arch.unwrap_or_default(),
+            arch,
             license: raw.license,
             size: raw.size,
             buildtime: raw.buildtime,
@@ -160,12 +208,12 @@ pub(crate) fn load_from_reader_impl<R: Read>(reader: R) -> Result<Packages> {
     let stream = Deserializer::from_reader(reader).into_iter::<RawPackage>();
     let mut packages = Packages::new();
     for result in stream {
-        let raw = result?;
+        let raw = result.context("parsing JSON")?;
         // Skip gpg-pubkey entries (they lack Arch and aren't real packages)
         if raw.name == "gpg-pubkey" {
             continue;
         }
-        let pkg = Package::try_from(raw)?;
+        let pkg = Package::try_from(raw).context("converting raw package")?;
         packages.insert(pkg.name.clone(), pkg);
     }
     Ok(packages)
