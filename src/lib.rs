@@ -7,16 +7,16 @@
 mod raw;
 
 use anyhow::{bail, Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
-use std::path::Path;
 use std::process::Command;
 
 /// A map of package names to their metadata.
 pub type Packages = HashMap<String, Package>;
 
 /// A map of file paths to their metadata.
-pub type Files = BTreeMap<String, FileInfo>;
+pub type Files = BTreeMap<Utf8PathBuf, FileInfo>;
 
 /// Cryptographic hash algorithm used for file digests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +147,7 @@ pub struct FileInfo {
     /// Owner group name.
     pub group: String,
     /// Symlink target, if this is a symbolic link.
-    pub linkto: Option<String>,
+    pub linkto: Option<Utf8PathBuf>,
 }
 
 /// Metadata for an installed RPM package.
@@ -189,7 +189,7 @@ pub fn load_from_str(s: &str) -> Result<Packages> {
 }
 
 /// Load all installed RPM packages from a rootfs by running `rpm -qa --json --root`.
-pub fn load_from_rootfs(rootfs: &Path) -> Result<Packages> {
+pub fn load_from_rootfs(rootfs: &Utf8Path) -> Result<Packages> {
     let output = Command::new("rpm")
         .args(["--root"])
         .arg(rootfs)
@@ -210,7 +210,7 @@ pub fn load_from_rootfs(rootfs: &Path) -> Result<Packages> {
 
 /// Load all installed RPM packages by running `rpm -qa --json`.
 pub fn load() -> Result<Packages> {
-    load_from_rootfs(Path::new("/"))
+    load_from_rootfs(Utf8Path::new("/"))
 }
 
 #[cfg(test)]
@@ -261,7 +261,7 @@ mod tests {
         // Check /usr/bin/bash exists
         let bash_bin = bash
             .files
-            .get("/usr/bin/bash")
+            .get(Utf8Path::new("/usr/bin/bash"))
             .expect("/usr/bin/bash not found");
         assert!(bash_bin.size > 0, "bash binary should have non-zero size");
         assert!(bash_bin.digest.is_some(), "bash binary should have digest");
@@ -279,7 +279,7 @@ mod tests {
         // Check a config file
         let bashrc = bash
             .files
-            .get("/etc/skel/.bashrc")
+            .get(Utf8Path::new("/etc/skel/.bashrc"))
             .expect("/etc/skel/.bashrc not found");
         assert!(bashrc.flags.is_config(), ".bashrc should be a config file");
         assert!(bashrc.flags.is_noreplace(), ".bashrc should be noreplace");
@@ -287,7 +287,7 @@ mod tests {
         // Check symlink /usr/bin/sh -> bash
         let sh = bash
             .files
-            .get("/usr/bin/sh")
+            .get(Utf8Path::new("/usr/bin/sh"))
             .expect("/usr/bin/sh not found");
         assert!(sh.linkto.is_some(), "/usr/bin/sh should be a symlink");
         assert_eq!(sh.linkto.as_ref().unwrap(), "bash");
@@ -298,7 +298,7 @@ mod tests {
         // /run/motd is a pure ghost file (flag=64)
         let motd = setup
             .files
-            .get("/run/motd")
+            .get(Utf8Path::new("/run/motd"))
             .expect("/run/motd not found");
         assert!(motd.flags.is_ghost(), "/run/motd should be a ghost");
         assert!(!motd.flags.is_config(), "/run/motd is not a config file");
@@ -307,7 +307,7 @@ mod tests {
         // /etc/fstab is ghost+config+missingok+noreplace (flag=89)
         let fstab = setup
             .files
-            .get("/etc/fstab")
+            .get(Utf8Path::new("/etc/fstab"))
             .expect("/etc/fstab not found");
         assert!(fstab.flags.is_ghost(), "/etc/fstab should be a ghost");
         assert!(fstab.flags.is_config(), "/etc/fstab should be a config file");

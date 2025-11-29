@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::Deserialize;
 use serde_json::Deserializer;
 use std::io::Read;
@@ -106,7 +107,7 @@ impl TryFrom<RawPackage> for Package {
                 );
             };
             let basename = &raw.basenames[i];
-            let path = format!("{}{}", dirname, basename);
+            let path = Utf8Path::new(dirname).join(basename);
 
             let size = *raw.filesizes.get(i).ok_or_else(|| {
                 anyhow::anyhow!("{}: missing filesize for {} (index {})", raw.name, path, i)
@@ -167,7 +168,7 @@ impl TryFrom<RawPackage> for Package {
             let linkto = if linkto.is_empty() {
                 None
             } else {
-                Some(linkto.clone())
+                Some(Utf8PathBuf::from(linkto))
             };
 
             let info = FileInfo {
