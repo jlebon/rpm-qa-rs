@@ -6,7 +6,7 @@
 
 mod raw;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
@@ -310,8 +310,62 @@ mod tests {
             .get(Utf8Path::new("/etc/fstab"))
             .expect("/etc/fstab not found");
         assert!(fstab.flags.is_ghost(), "/etc/fstab should be a ghost");
-        assert!(fstab.flags.is_config(), "/etc/fstab should be a config file");
+        assert!(
+            fstab.flags.is_config(),
+            "/etc/fstab should be a config file"
+        );
         assert!(fstab.flags.is_missingok(), "/etc/fstab should be missingok");
         assert!(fstab.flags.is_noreplace(), "/etc/fstab should be noreplace");
+    }
+
+    #[test]
+    fn test_directory_ownership() {
+        // Test that files can be owned by a different package than the directory they reside in.
+        // In this fixture:
+        // - rpm owns /usr/lib/rpm/macros.d/ (the directory)
+        // - fedora-release-common owns /usr/lib/rpm/macros.d/macros.dist (a file in that directory)
+        let packages = load_from_str(FIXTURE).expect("failed to load packages");
+
+        let rpm = packages.get("rpm").expect("rpm package not found");
+        let fedora_release = packages
+            .get("fedora-release-common")
+            .expect("fedora-release-common package not found");
+
+        // Verify rpm owns the macros.d directory
+        let macros_d = rpm
+            .files
+            .get(Utf8Path::new("/usr/lib/rpm/macros.d"))
+            .expect("/usr/lib/rpm/macros.d not found in rpm");
+        // Directory mode: 0o40755 = 16877
+        assert_eq!(
+            macros_d.mode & 0o170000,
+            0o040000,
+            "macros.d should be a directory"
+        );
+
+        // Verify fedora-release-common owns macros.dist file
+        assert!(
+            fedora_release
+                .files
+                .contains_key(Utf8Path::new("/usr/lib/rpm/macros.d/macros.dist")),
+            "/usr/lib/rpm/macros.d/macros.dist not found in fedora-release-common"
+        );
+
+        // Verify the file is NOT in rpm's file list
+        assert!(
+            rpm.files
+                .get(Utf8Path::new("/usr/lib/rpm/macros.d/macros.dist"))
+                .is_none(),
+            "macros.dist should not be owned by rpm"
+        );
+
+        // Verify the directory is NOT in fedora-release-common's file list
+        assert!(
+            fedora_release
+                .files
+                .get(Utf8Path::new("/usr/lib/rpm/macros.d"))
+                .is_none(),
+            "macros.d directory should not be owned by fedora-release-common"
+        );
     }
 }

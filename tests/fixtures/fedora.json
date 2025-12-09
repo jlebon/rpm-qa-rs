@@ -38736,3 +38736,48 @@
   "Payloaddigestalgo": 8,
   "Payloaddigestalt": "9ec3e385ee77850147f2af1fdf47cd0d0d031f25f425e43977373ea9722bd50e"
 }
+{
+  "Name": "fedora-release-common",
+  "Version": "43",
+  "Release": "25",
+  "Arch": "noarch",
+  "License": "MIT",
+  "Size": 21067,
+  "Buildtime": 1760217219,
+  "Installtime": 1763966823,
+  "Sourcerpm": "fedora-release-43-25.src.rpm",
+  "Filesizes": [
+    568
+  ],
+  "Filemodes": [
+    33188
+  ],
+  "Filemtimes": [
+    1760140800
+  ],
+  "Filedigests": [
+    "36cd7ca8e34b902e9e3d944a6a6b435784a5b9a658b5f89a6dcf0f66a3a33c0b"
+  ],
+  "Filelinktos": [
+    ""
+  ],
+  "Fileflags": [
+    0
+  ],
+  "Fileusername": [
+    "root"
+  ],
+  "Filegroupname": [
+    "root"
+  ],
+  "Dirindexes": [
+    0
+  ],
+  "Basenames": [
+    "macros.dist"
+  ],
+  "Dirnames": [
+    "/usr/lib/rpm/macros.d/"
+  ],
+  "Filedigestalgo": 8
+}
