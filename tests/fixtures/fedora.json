@@ -38781,3 +38781,26 @@
   ],
   "Filedigestalgo": 8
 }
+{
+  "Name": "langpacks-core-en",
+  "Version": "4.2",
+  "Release": "4.fc42",
+  "Arch": "noarch",
+  "License": "GPL-2.0-or-later",
+  "Size": 398,
+  "Buildtime": 1737608439,
+  "Installtime": 1762753690,
+  "Sourcerpm": "langpacks-4.2-4.fc42.src.rpm",
+  "Filesizes": 398,
+  "Filemodes": 33188,
+  "Filemtimes": 1737417600,
+  "Filedigests": "d0ba061c715c73b91d2be66ab40adfab510ed4e69cf5d40970733e211de38ce6",
+  "Filelinktos": "",
+  "Fileflags": 0,
+  "Fileusername": "root",
+  "Filegroupname": "root",
+  "Dirindexes": 0,
+  "Basenames": "org.fedoraproject.LangPack-Core-en.metainfo.xml",
+  "Dirnames": "/usr/share/metainfo/",
+  "Filedigestalgo": 8
+}

@@ -6,6 +6,27 @@ use std::io::Read;
 
 use crate::*;
 
+/// Helper to deserialize a value that can be either a single item or an array.
+/// rpm outputs scalars for single-file packages but arrays for multi-file packages.
+fn deserialize_one_or_many<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany<T> {
+        One(T),
+        Many(Vec<T>),
+    }
+
+    match Option::<OneOrMany<T>>::deserialize(deserializer)? {
+        None => Ok(Vec::new()),
+        Some(OneOrMany::One(v)) => Ok(vec![v]),
+        Some(OneOrMany::Many(v)) => Ok(v),
+    }
+}
+
 impl TryFrom<u32> for DigestAlgorithm {
     type Error = ();
 
@@ -52,28 +73,27 @@ struct RawPackage {
     installtime: u64,
     #[serde(deserialize_with = "deserialize_none_string")]
     sourcerpm: Option<String>,
-    // File-related arrays
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     basenames: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     dirnames: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     dirindexes: Vec<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filesizes: Vec<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filemodes: Vec<u16>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filemtimes: Vec<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filedigests: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     fileflags: Vec<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     fileusername: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filegroupname: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filelinktos: Vec<String>,
     #[serde(default)]
     filedigestalgo: Option<u32>,

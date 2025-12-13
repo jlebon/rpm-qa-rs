@@ -419,4 +419,34 @@ mod tests {
             "macros.d directory should not be owned by fedora-release-common"
         );
     }
+
+    #[test]
+    fn test_single_file_scalar_values() {
+        // Test that single-file packages with scalar values (instead of arrays) are parsed correctly.
+        // This tests the deserialize_one_or_many function in raw.rs.
+        let packages = load_from_str(FIXTURE).expect("failed to load packages");
+        let pkg = packages
+            .get("langpacks-core-en")
+            .expect("langpacks-core-en package not found");
+
+        assert_eq!(pkg.name, "langpacks-core-en");
+        assert_eq!(pkg.version, "4.2");
+        assert_eq!(pkg.release, "4.fc42");
+        assert_eq!(pkg.files.len(), 1);
+
+        let file = pkg
+            .files
+            .get(Utf8Path::new(
+                "/usr/share/metainfo/org.fedoraproject.LangPack-Core-en.metainfo.xml",
+            ))
+            .expect("metainfo.xml not found");
+        assert_eq!(file.size, 398);
+        assert_eq!(file.user, "root");
+        assert_eq!(file.group, "root");
+        assert!(file.digest.is_some());
+        assert_eq!(
+            file.digest.as_ref().unwrap().hex,
+            "d0ba061c715c73b91d2be66ab40adfab510ed4e69cf5d40970733e211de38ce6"
+        );
+    }
 }
