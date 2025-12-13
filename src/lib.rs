@@ -8,8 +8,10 @@ mod raw;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
+use cap_std::fs::Dir;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::process::Command;
 
 /// A map of package names to their metadata.
@@ -188,11 +190,25 @@ pub fn load_from_str(s: &str) -> Result<Packages> {
     load_from_reader(s.as_bytes())
 }
 
-/// Load all installed RPM packages from a rootfs by running `rpm -qa --json --root`.
+/// Load all installed RPM packages from a rootfs path by running `rpm -qa --json --root`.
 pub fn load_from_rootfs(rootfs: &Utf8Path) -> Result<Packages> {
+    run_rpm(rootfs.as_str())
+}
+
+/// Load all installed RPM packages from a rootfs directory by running `rpm -qa --json --root`.
+pub fn load_from_rootfs_dir(rootfs: &Dir) -> Result<Packages> {
+    use rustix::io::dup;
+    // Dup the fd as a way to clear O_CLOEXEC so rpm can access it.
+    // See also CapStdExtCommandExt::take_fn_n() though here we don't leak.
+    let duped = dup(rootfs).context("failed to dup rootfs fd")?;
+    let rootfs_path = format!("/proc/self/fd/{}", duped.as_raw_fd());
+    run_rpm(&rootfs_path)
+}
+
+fn run_rpm(rootfs_path: &str) -> Result<Packages> {
     let output = Command::new("rpm")
         .args(["--root"])
-        .arg(rootfs)
+        .arg(rootfs_path)
         .args(["-qa", "--json"])
         .output()
         .context("failed to run rpm")?;
@@ -218,6 +234,41 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("../tests/fixtures/fedora.json");
+
+    fn setup_test_rootfs() -> tempfile::TempDir {
+        let tmpdir = tempfile::tempdir().expect("failed to create tempdir");
+        let rpmdb_dir = tmpdir.path().join("usr/lib/sysimage/rpm");
+        std::fs::create_dir_all(&rpmdb_dir).expect("failed to create rpmdb dir");
+        std::fs::copy(
+            "tests/fixtures/rpmdb.sqlite",
+            rpmdb_dir.join("rpmdb.sqlite"),
+        )
+        .expect("failed to copy rpmdb.sqlite");
+        tmpdir
+    }
+
+    #[test]
+    fn test_load_from_rootfs() {
+        let tmpdir = setup_test_rootfs();
+        let rootfs = Utf8Path::from_path(tmpdir.path()).expect("non-utf8 path");
+        let packages = load_from_rootfs(rootfs).expect("failed to load packages");
+
+        assert!(packages.contains_key("filesystem"));
+        assert!(packages.contains_key("setup"));
+        assert!(packages.contains_key("fedora-release"));
+    }
+
+    #[test]
+    fn test_load_from_rootfs_dir() {
+        let tmpdir = setup_test_rootfs();
+        let rootfs_dir = Dir::open_ambient_dir(tmpdir.path(), cap_std::ambient_authority())
+            .expect("failed to open rootfs dir");
+        let packages = load_from_rootfs_dir(&rootfs_dir).expect("failed to load packages");
+
+        assert!(packages.contains_key("filesystem"));
+        assert!(packages.contains_key("setup"));
+        assert!(packages.contains_key("fedora-release"));
+    }
 
     #[test]
     fn test_load_from_str() {
