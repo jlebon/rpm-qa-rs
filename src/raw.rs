@@ -97,6 +97,8 @@ struct RawPackage {
     filelinktos: Vec<String>,
     #[serde(default)]
     filedigestalgo: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
+    changelogtime: Vec<u64>,
 }
 
 impl TryFrom<RawPackage> for Package {
@@ -220,6 +222,7 @@ impl TryFrom<RawPackage> for Package {
             buildtime: raw.buildtime,
             installtime: raw.installtime,
             sourcerpm: raw.sourcerpm,
+            changelog_times: raw.changelogtime,
             files,
         })
     }

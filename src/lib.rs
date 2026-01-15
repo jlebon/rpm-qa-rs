@@ -176,6 +176,8 @@ pub struct Package {
     pub installtime: u64,
     /// Package source rpm file name.
     pub sourcerpm: Option<String>,
+    /// Unix timestamps of changelog entries (most recent first).
+    pub changelog_times: Vec<u64>,
     /// Files contained in this package.
     pub files: Files,
 }
@@ -447,6 +449,34 @@ mod tests {
         assert_eq!(
             file.digest.as_ref().unwrap().hex,
             "d0ba061c715c73b91d2be66ab40adfab510ed4e69cf5d40970733e211de38ce6"
+        );
+    }
+
+    #[test]
+    fn test_changelog_times() {
+        let packages = load_from_str(FIXTURE).expect("failed to load packages");
+
+        // bash package should have multiple changelog entries
+        let bash = packages.get("bash").expect("bash package not found");
+        assert!(
+            !bash.changelog_times.is_empty(),
+            "bash should have changelog entries"
+        );
+
+        // Verify changelog times are reasonable Unix timestamps (after 2020)
+        let min_valid_time = 1577836800u64; // 2020-01-01
+        for &time in &bash.changelog_times {
+            assert!(time > min_valid_time, "changelog time {} is too old", time);
+        }
+
+        // Some packages may have no changelog entries (e.g. langpacks-core-en)
+        // This should still parse successfully with an empty changelog_times vec
+        let langpacks = packages
+            .get("langpacks-core-en")
+            .expect("langpacks-core-en package not found");
+        assert!(
+            langpacks.changelog_times.is_empty(),
+            "expected langpacks-core-en to have no changelog entries"
         );
     }
 }
