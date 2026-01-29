@@ -8,7 +8,7 @@ mod raw;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use cap_std::fs::Dir;
+use cap_std_ext::cap_std::fs::Dir;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::os::fd::AsRawFd;
@@ -263,8 +263,9 @@ mod tests {
     #[test]
     fn test_load_from_rootfs_dir() {
         let tmpdir = setup_test_rootfs();
-        let rootfs_dir = Dir::open_ambient_dir(tmpdir.path(), cap_std::ambient_authority())
-            .expect("failed to open rootfs dir");
+        let rootfs_dir =
+            Dir::open_ambient_dir(tmpdir.path(), cap_std_ext::cap_std::ambient_authority())
+                .expect("failed to open rootfs dir");
         let packages = load_from_rootfs_dir(&rootfs_dir).expect("failed to load packages");
 
         assert!(packages.contains_key("filesystem"));
