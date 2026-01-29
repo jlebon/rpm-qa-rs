@@ -2,6 +2,10 @@
 name = "rpm-qa"
 version = "0.1.0"
 edition = "2024"
+description = "A thin Rust wrapper around `rpm -qa --json`"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/jlebon/rpm-qa-rs"
+keywords = ["rpm", "fedora", "rhel", "package"]
 
 [dependencies]
 anyhow = "1"
