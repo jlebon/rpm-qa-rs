@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: dnf install -y git-core cargo
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build
         run: cargo build --verbose
