@@ -12,6 +12,7 @@ use cap_std_ext::cap_std::fs::Dir;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::process::Command;
 
 /// A map of package names to their metadata.
@@ -192,12 +193,12 @@ pub fn load_from_str(s: &str) -> Result<Packages> {
     load_from_reader(s.as_bytes())
 }
 
-/// Load all installed RPM packages from a rootfs path by running `rpm -qa --json --root`.
+/// Load all installed RPM packages from a rootfs path by running `rpm -qa --json`.
 pub fn load_from_rootfs(rootfs: &Utf8Path) -> Result<Packages> {
     run_rpm(rootfs.as_str())
 }
 
-/// Load all installed RPM packages from a rootfs directory by running `rpm -qa --json --root`.
+/// Load all installed RPM packages from a rootfs directory by running `rpm -qa --json`.
 pub fn load_from_rootfs_dir(rootfs: &Dir) -> Result<Packages> {
     use rustix::io::dup;
     // Dup the fd as a way to clear O_CLOEXEC so rpm can access it.
@@ -207,13 +208,29 @@ pub fn load_from_rootfs_dir(rootfs: &Dir) -> Result<Packages> {
     run_rpm(&rootfs_path)
 }
 
+/// Note the host `rpm` resolves `%_dbpath` from its own macro context, not the
+/// target rootfs's. We probe the rootfs to find where the rpmdb actually is and
+/// pass `--dbpath` explicitly to avoid mismatches (e.g. Fedora host reading a
+/// RHEL 9 rootfs).
+const RPMDB_PATHS: &[&str] = &["usr/lib/sysimage/rpm", "var/lib/rpm", "usr/share/rpm"];
+
+fn find_dbpath(rootfs: &Path) -> Result<Option<&'static str>> {
+    for dbpath in RPMDB_PATHS {
+        if std::fs::exists(rootfs.join(dbpath)).context("failed to probe rpmdb path")? {
+            return Ok(Some(dbpath));
+        }
+    }
+    Ok(None)
+}
+
 fn run_rpm(rootfs_path: &str) -> Result<Packages> {
-    let output = Command::new("rpm")
-        .args(["--root"])
-        .arg(rootfs_path)
-        .args(["-qa", "--json"])
-        .output()
-        .context("failed to run rpm")?;
+    let mut cmd = Command::new("rpm");
+    cmd.arg("--root").arg(rootfs_path);
+    if let Some(dbpath) = find_dbpath(Path::new(rootfs_path))? {
+        cmd.arg("--dbpath").arg(format!("/{dbpath}"));
+    }
+    cmd.args(["-qa", "--json"]);
+    let output = cmd.output().context("failed to run rpm")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -237,9 +254,9 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../tests/fixtures/fedora.json");
 
-    fn setup_test_rootfs() -> tempfile::TempDir {
+    fn setup_test_rootfs_at(rpmdb_relpath: &str) -> tempfile::TempDir {
         let tmpdir = tempfile::tempdir().expect("failed to create tempdir");
-        let rpmdb_dir = tmpdir.path().join("usr/lib/sysimage/rpm");
+        let rpmdb_dir = tmpdir.path().join(rpmdb_relpath);
         std::fs::create_dir_all(&rpmdb_dir).expect("failed to create rpmdb dir");
         std::fs::copy(
             "tests/fixtures/rpmdb.sqlite",
@@ -249,15 +266,22 @@ mod tests {
         tmpdir
     }
 
+    fn setup_test_rootfs() -> tempfile::TempDir {
+        setup_test_rootfs_at("usr/lib/sysimage/rpm")
+    }
+
+    fn assert_has_test_packages(packages: &Packages) {
+        assert!(packages.contains_key("filesystem"));
+        assert!(packages.contains_key("setup"));
+        assert!(packages.contains_key("fedora-release"));
+    }
+
     #[test]
     fn test_load_from_rootfs() {
         let tmpdir = setup_test_rootfs();
         let rootfs = Utf8Path::from_path(tmpdir.path()).expect("non-utf8 path");
         let packages = load_from_rootfs(rootfs).expect("failed to load packages");
-
-        assert!(packages.contains_key("filesystem"));
-        assert!(packages.contains_key("setup"));
-        assert!(packages.contains_key("fedora-release"));
+        assert_has_test_packages(&packages);
     }
 
     #[test]
@@ -267,10 +291,15 @@ mod tests {
             Dir::open_ambient_dir(tmpdir.path(), cap_std_ext::cap_std::ambient_authority())
                 .expect("failed to open rootfs dir");
         let packages = load_from_rootfs_dir(&rootfs_dir).expect("failed to load packages");
+        assert_has_test_packages(&packages);
+    }
 
-        assert!(packages.contains_key("filesystem"));
-        assert!(packages.contains_key("setup"));
-        assert!(packages.contains_key("fedora-release"));
+    #[test]
+    fn test_load_from_rootfs_legacy_dbpath() {
+        let tmpdir = setup_test_rootfs_at("var/lib/rpm");
+        let rootfs = Utf8Path::from_path(tmpdir.path()).expect("non-utf8 path");
+        let packages = load_from_rootfs(rootfs).expect("failed to load packages");
+        assert_has_test_packages(&packages);
     }
 
     #[test]
