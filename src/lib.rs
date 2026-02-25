@@ -509,4 +509,31 @@ mod tests {
             "expected langpacks-core-en to have no changelog entries"
         );
     }
+
+    #[test]
+    fn test_filedigestalgo_array() {
+        // Regression test for https://github.com/coreos/chunkah/issues/64
+        let json = r#"{
+            "Name": "test-pkg", "Version": "0", "Release": "0", "Arch": "x86_64",
+            "License": "MIT", "Size": 0, "Buildtime": 0, "Installtime": 0,
+            "Sourcerpm": null,
+            "Basenames": ["aa", "bb"], "Dirnames": "/", "Dirindexes": [0, 0],
+            "Filesizes": [0, 0], "Filemodes": [33261, 33261], "Filemtimes": [0, 0],
+            "Filedigests": ["aa", "bb"], "Filedigestalgo": [8, 8],
+            "Fileflags": [0, 0], "Fileusername": ["root", "root"],
+            "Filegroupname": ["root", "root"], "Filelinktos": ["", ""]
+        }"#;
+
+        let packages = load_from_str(json).expect("failed to parse array Filedigestalgo");
+        let pkg = packages.get("test-pkg").expect("test package not found");
+        assert_eq!(pkg.files.len(), 2);
+        for path in ["/aa", "/bb"] {
+            let file = pkg.files.get(Utf8Path::new(path)).expect(path);
+            assert_eq!(
+                file.digest.as_ref().unwrap().algorithm,
+                DigestAlgorithm::Sha256
+            );
+            assert_eq!(file.digest.as_ref().unwrap().hex, path.get(1..).unwrap());
+        }
+    }
 }
