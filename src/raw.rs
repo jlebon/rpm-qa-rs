@@ -95,24 +95,36 @@ struct RawPackage {
     filegroupname: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_one_or_many")]
     filelinktos: Vec<String>,
-    #[serde(default)]
-    filedigestalgo: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_one_or_many")]
+    filedigestalgo: Vec<u32>,
     #[serde(default, deserialize_with = "deserialize_one_or_many")]
     changelogtime: Vec<u64>,
+}
+
+/// Get the digest algorithm for a given file index. Handles both per-package
+/// (scalar/single-element) and per-file (array) forms.
+fn get_digest_algo(algos: &[u32], index: usize) -> Result<Option<DigestAlgorithm>> {
+    let algo_raw = match algos.len() {
+        0 => return Ok(None),
+        1 => algos[0], // scalar; use it for all files
+        // array; use corresponding index
+        _ => *algos
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("missing digest algorithm for file index {}", index))?,
+    };
+    DigestAlgorithm::try_from(algo_raw).map(Some).map_err(|_| {
+        anyhow::anyhow!(
+            "unknown digest algorithm {} for file index {}",
+            algo_raw,
+            index
+        )
+    })
 }
 
 impl TryFrom<RawPackage> for Package {
     type Error = anyhow::Error;
 
     fn try_from(raw: RawPackage) -> Result<Self> {
-        let digest_algo = raw
-            .filedigestalgo
-            .map(|v| {
-                DigestAlgorithm::try_from(v)
-                    .map_err(|_| anyhow::anyhow!("{}: unknown digest algorithm {}", raw.name, v))
-            })
-            .transpose()?;
-
         let mut files = Files::new();
 
         for i in 0..raw.basenames.len() {
@@ -180,10 +192,12 @@ impl TryFrom<RawPackage> for Package {
             let digest = if filedigest.is_empty() {
                 None
             } else {
-                digest_algo.map(|algorithm| FileDigest {
-                    algorithm,
-                    hex: filedigest.clone(),
-                })
+                get_digest_algo(&raw.filedigestalgo, i)
+                    .with_context(|| format!("{}: {}", raw.name, path))?
+                    .map(|algorithm| FileDigest {
+                        algorithm,
+                        hex: filedigest.clone(),
+                    })
             };
 
             // Build linkto if non-empty
