@@ -1,8 +1,8 @@
 [package]
 name = "rpm-qa"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
-description = "A thin Rust wrapper around `rpm -qa --json`"
+description = "A thin Rust wrapper around `rpm -qa`"
 license = "LGPL-2.1-or-later"
 repository = "https://github.com/jlebon/rpm-qa-rs"
 keywords = ["rpm", "fedora", "rhel", "package"]
@@ -12,8 +12,6 @@ anyhow = "1"
 camino = "1"
 cap-std-ext = "5"
 rustix = { version = "1", features = ["fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
