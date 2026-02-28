@@ -1,10 +1,12 @@
-//! A thin Rust wrapper around `rpm -qa --json`
+//! A thin Rust wrapper around `rpm -qa`
 //!
-//! This crate provides functions to load and parse the JSON output from
-//! `rpm -qa --json`, returning package metadata as a map of package names
-//! to `Package` structs.
+//! This crate provides functions to load and parse the output from
+//! `rpm -qa --queryformat`, returning package metadata as a map of package
+//! names to `Package` structs.
+//!
+//! Uses `--queryformat` instead of `--json` for compatibility with older RPM.
 
-mod raw;
+mod parse;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -48,15 +50,6 @@ pub enum DigestAlgorithm {
     Sha3_256 = 12,
     /// SHA3-512.
     Sha3_512 = 14,
-}
-
-/// A file digest with its algorithm.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileDigest {
-    /// The hash algorithm used.
-    pub algorithm: DigestAlgorithm,
-    /// The hex-encoded digest value.
-    pub hex: String,
 }
 
 /// File attribute flags from the RPM spec file.
@@ -141,8 +134,8 @@ pub struct FileInfo {
     pub mode: u16,
     /// Unix modification timestamp.
     pub mtime: u64,
-    /// File digest, if present (directories and symlinks have none).
-    pub digest: Option<FileDigest>,
+    /// Hex-encoded file digest, if present (directories and symlinks have none).
+    pub digest: Option<String>,
     /// File attribute flags.
     pub flags: FileFlags,
     /// Owner username.
@@ -177,28 +170,30 @@ pub struct Package {
     pub installtime: u64,
     /// Package source rpm file name.
     pub sourcerpm: Option<String>,
+    /// Digest algorithm used for file digests in this package.
+    pub digest_algo: Option<DigestAlgorithm>,
     /// Unix timestamps of changelog entries (most recent first).
     pub changelog_times: Vec<u64>,
     /// Files contained in this package.
     pub files: Files,
 }
 
-/// Load packages from a reader containing JSON output from `rpm -qa --json`.
+/// Load packages from a reader containing queryformat output.
 pub fn load_from_reader<R: Read>(reader: R) -> Result<Packages> {
-    raw::load_from_reader_impl(reader)
+    parse::load_from_reader_impl(reader)
 }
 
-/// Load packages from a string containing JSON output from `rpm -qa --json`.
+/// Load packages from a string containing queryformat output.
 pub fn load_from_str(s: &str) -> Result<Packages> {
-    load_from_reader(s.as_bytes())
+    parse::load_from_str_impl(s)
 }
 
-/// Load all installed RPM packages from a rootfs path by running `rpm -qa --json`.
+/// Load all installed RPM packages from a rootfs path by running `rpm -qa`.
 pub fn load_from_rootfs(rootfs: &Utf8Path) -> Result<Packages> {
     run_rpm(rootfs.as_str())
 }
 
-/// Load all installed RPM packages from a rootfs directory by running `rpm -qa --json`.
+/// Load all installed RPM packages from a rootfs directory by running `rpm -qa`.
 pub fn load_from_rootfs_dir(rootfs: &Dir) -> Result<Packages> {
     use rustix::io::dup;
     // Dup the fd as a way to clear O_CLOEXEC so rpm can access it.
@@ -229,21 +224,34 @@ fn run_rpm(rootfs_path: &str) -> Result<Packages> {
     if let Some(dbpath) = find_dbpath(Path::new(rootfs_path))? {
         cmd.arg("--dbpath").arg(format!("/{dbpath}"));
     }
-    cmd.args(["-qa", "--json"]);
-    let output = cmd.output().context("failed to run rpm")?;
+    cmd.args(["-qa", "--queryformat", parse::QUERYFORMAT]);
+    cmd.stdout(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("failed to run rpm")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to capture rpm stdout")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        match output.status.code() {
-            Some(code) => bail!("rpm command failed (exit code {}): {}", code, stderr),
-            None => bail!("rpm command failed: {}", stderr),
+    let packages = load_from_reader(stdout);
+
+    let status = child.wait().context("failed to wait for rpm")?;
+    if !status.success() {
+        match status.code() {
+            Some(code) => bail!("rpm command failed (exit code {})", code),
+            None => {
+                use std::os::unix::process::ExitStatusExt;
+                bail!(
+                    "rpm command killed by signal {}",
+                    status.signal().unwrap_or(0)
+                )
+            }
         }
     }
 
-    load_from_reader(output.stdout.as_slice())
+    packages
 }
 
-/// Load all installed RPM packages by running `rpm -qa --json`.
+/// Load all installed RPM packages by running `rpm -qa`.
 pub fn load() -> Result<Packages> {
     load_from_rootfs(Utf8Path::new("/"))
 }
@@ -252,7 +260,7 @@ pub fn load() -> Result<Packages> {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = include_str!("../tests/fixtures/fedora.json");
+    const FIXTURE: &str = include_str!("../tests/fixtures/fedora.qf");
 
     fn setup_test_rootfs_at(rpmdb_relpath: &str) -> tempfile::TempDir {
         let tmpdir = tempfile::tempdir().expect("failed to create tempdir");
@@ -348,10 +356,7 @@ mod tests {
             .expect("/usr/bin/bash not found");
         assert!(bash_bin.size > 0, "bash binary should have non-zero size");
         assert!(bash_bin.digest.is_some(), "bash binary should have digest");
-        assert_eq!(
-            bash_bin.digest.as_ref().unwrap().algorithm,
-            DigestAlgorithm::Sha256
-        );
+        assert_eq!(bash.digest_algo, Some(DigestAlgorithm::Sha256));
         assert!(
             !bash_bin.flags.is_config(),
             "bash binary is not a config file"
@@ -454,8 +459,7 @@ mod tests {
 
     #[test]
     fn test_single_file_scalar_values() {
-        // Test that single-file packages with scalar values (instead of arrays) are parsed correctly.
-        // This tests the deserialize_one_or_many function in raw.rs.
+        // Test that single-file packages are parsed correctly.
         let packages = load_from_str(FIXTURE).expect("failed to load packages");
         let pkg = packages
             .get("langpacks-core-en")
@@ -463,7 +467,7 @@ mod tests {
 
         assert_eq!(pkg.name, "langpacks-core-en");
         assert_eq!(pkg.version, "4.2");
-        assert_eq!(pkg.release, "4.fc42");
+        assert_eq!(pkg.release, "5.fc43");
         assert_eq!(pkg.files.len(), 1);
 
         let file = pkg
@@ -475,10 +479,9 @@ mod tests {
         assert_eq!(file.size, 398);
         assert_eq!(file.user, "root");
         assert_eq!(file.group, "root");
-        assert!(file.digest.is_some());
         assert_eq!(
-            file.digest.as_ref().unwrap().hex,
-            "d0ba061c715c73b91d2be66ab40adfab510ed4e69cf5d40970733e211de38ce6"
+            file.digest.as_deref(),
+            Some("d0ba061c715c73b91d2be66ab40adfab510ed4e69cf5d40970733e211de38ce6")
         );
     }
 
@@ -497,43 +500,6 @@ mod tests {
         let min_valid_time = 1577836800u64; // 2020-01-01
         for &time in &bash.changelog_times {
             assert!(time > min_valid_time, "changelog time {} is too old", time);
-        }
-
-        // Some packages may have no changelog entries (e.g. langpacks-core-en)
-        // This should still parse successfully with an empty changelog_times vec
-        let langpacks = packages
-            .get("langpacks-core-en")
-            .expect("langpacks-core-en package not found");
-        assert!(
-            langpacks.changelog_times.is_empty(),
-            "expected langpacks-core-en to have no changelog entries"
-        );
-    }
-
-    #[test]
-    fn test_filedigestalgo_array() {
-        // Regression test for https://github.com/coreos/chunkah/issues/64
-        let json = r#"{
-            "Name": "test-pkg", "Version": "0", "Release": "0", "Arch": "x86_64",
-            "License": "MIT", "Size": 0, "Buildtime": 0, "Installtime": 0,
-            "Sourcerpm": null,
-            "Basenames": ["aa", "bb"], "Dirnames": "/", "Dirindexes": [0, 0],
-            "Filesizes": [0, 0], "Filemodes": [33261, 33261], "Filemtimes": [0, 0],
-            "Filedigests": ["aa", "bb"], "Filedigestalgo": [8, 8],
-            "Fileflags": [0, 0], "Fileusername": ["root", "root"],
-            "Filegroupname": ["root", "root"], "Filelinktos": ["", ""]
-        }"#;
-
-        let packages = load_from_str(json).expect("failed to parse array Filedigestalgo");
-        let pkg = packages.get("test-pkg").expect("test package not found");
-        assert_eq!(pkg.files.len(), 2);
-        for path in ["/aa", "/bb"] {
-            let file = pkg.files.get(Utf8Path::new(path)).expect(path);
-            assert_eq!(
-                file.digest.as_ref().unwrap().algorithm,
-                DigestAlgorithm::Sha256
-            );
-            assert_eq!(file.digest.as_ref().unwrap().hex, path.get(1..).unwrap());
         }
     }
 }

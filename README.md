@@ -1,10 +1,11 @@
 # rpm-qa-rs
 
-A thin Rust wrapper around `rpm -qa --json`.
+A thin Rust wrapper around `rpm -qa`.
 
-This crate provides functions to load and parse the JSON output from
-`rpm -qa --json`, returning package metadata as a map of package names
-to `Package` structs.
+This crate provides functions to load and parse the output from
+`rpm -qa --queryformat`, returning package metadata as a map of package names to
+`Package` structs. RPM 6.0+ supports `--json` but (1) that's actually _slower_
+than `--queryformat`, and (2) we want compatibility with older RPM.
 
 ## Usage
 
@@ -27,12 +28,12 @@ for (name, pkg) in &packages {
 ## Comparison with librpm.rs
 
 The [librpm.rs](https://github.com/rpm-software-management/librpm.rs) project
-provides Rust FFI bindings for librpm. For anything tightly integrated into RPM,
-it would be great for you to contribute there and use that instead. For example,
-this allows cheaper queries that don't load things like changelogs, unlike `rpm
--qa --json`. And the scope of that project is to eventually cover other major
-parts of the RPM API such as building and sigining. This project OTOH is limited
-just to rpmdb querying. Some of the reasons why I built it were:
+provides Rust FFI bindings for librpm. For anything tightly integrated into
+RPM, it would be great for you to contribute there and use that instead. For
+example, this allows cheaper queries that don't load things like changelogs.
+And the scope of that project is to eventually cover other major parts of the
+RPM API such as building and signing. This project OTOH is limited just to rpmdb
+querying. Some of the reasons why I built it were:
 - The librpm.rs bindings are currently limited and don't for example support RPM
 file listings (though this likely wouldn't be hard to add).
 - For my use case of this library, I want to avoid linking to other libraries
