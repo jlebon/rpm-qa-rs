@@ -147,7 +147,7 @@ pub struct FileInfo {
 }
 
 /// Metadata for an installed RPM package.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Package {
     /// Package name.
     pub name: String,
