@@ -12,10 +12,11 @@ use crate::*;
 pub(crate) const QUERYFORMAT: &str = concat!(
     // Per-package header line:
     r"@@PKG@@\t%{NAME}\t%{VERSION}\t%{RELEASE}\t%{EPOCH}\t%{ARCH}",
-    r"\t%{LICENSE}\t%{SIZE}\t%{BUILDTIME}\t%{INSTALLTIME}",
+    // Some RPM 6-built packages populate only the 64-bit size tags.
+    r"\t%{LICENSE}\t%{SIZE}\t%{LONGSIZE}\t%{BUILDTIME}\t%{INSTALLTIME}",
     r"\t%{SOURCERPM}\t%{FILEDIGESTALGO}\n",
     // Per-file lines (iterated with []):
-    r"[@@FILE@@\t%{FILENAMES}\t%{FILESIZES}\t%{FILEMODES}\t%{FILEMTIMES}",
+    r"[@@FILE@@\t%{FILENAMES}\t%{FILESIZES}\t%{LONGFILESIZES}\t%{FILEMODES}\t%{FILEMTIMES}",
     r"\t%{FILEDIGESTS}\t%{FILEFLAGS}",
     r"\t%{FILEUSERNAME}\t%{FILEGROUPNAME}\t%{FILELINKTOS}\n]",
     // Per-changelog lines (iterated with []):
@@ -24,8 +25,10 @@ pub(crate) const QUERYFORMAT: &str = concat!(
 
 /// Expected number of tab-separated fields after stripping the @@PKG@@ prefix.
 const PKG_FIELDS: usize = 11;
+const PKG_FIELDS_WITH_LONG_SIZE: usize = 12;
 /// Expected number of tab-separated fields after stripping the @@FILE@@ prefix.
 const FILE_FIELDS: usize = 9;
+const FILE_FIELDS_WITH_LONG_SIZE: usize = 10;
 
 /// Stream-parse queryformat output from a reader.
 pub(crate) fn load_from_reader_impl<R: Read>(reader: R) -> Result<Packages> {
@@ -47,9 +50,9 @@ pub(crate) fn load_from_reader_impl<R: Read>(reader: R) -> Result<Packages> {
             }
 
             let fields: Vec<&str> = rest.split('\t').collect();
-            if fields.len() != PKG_FIELDS {
+            if fields.len() != PKG_FIELDS && fields.len() != PKG_FIELDS_WITH_LONG_SIZE {
                 bail!(
-                    "line {}: expected {PKG_FIELDS} fields in PKG line, got {}",
+                    "line {}: expected {PKG_FIELDS} or {PKG_FIELDS_WITH_LONG_SIZE} fields in PKG line, got {}",
                     line_no + 1,
                     fields.len()
                 );
@@ -74,11 +77,12 @@ pub(crate) fn load_from_reader_impl<R: Read>(reader: R) -> Result<Packages> {
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("line {}: FILE line before any PKG", line_no + 1))?;
             let fields: Vec<&str> = rest.split('\t').collect();
-            if fields.len() != FILE_FIELDS {
+            if fields.len() != FILE_FIELDS && fields.len() != FILE_FIELDS_WITH_LONG_SIZE {
                 bail!(
-                    "line {}: expected {} fields in FILE line for '{}', got {}",
+                    "line {}: expected {} or {} fields in FILE line for '{}', got {}",
                     line_no + 1,
                     FILE_FIELDS,
+                    FILE_FIELDS_WITH_LONG_SIZE,
                     pkg.name,
                     fields.len()
                 );
@@ -123,8 +127,13 @@ pub(crate) fn load_from_str_impl(input: &str) -> Result<Packages> {
 /// Parse the package header fields from a @@PKG@@ line into a partially-built
 /// Package (files and changelog_times are filled in later).
 fn parse_pkg_header(fields: &[&str]) -> Result<Package> {
-    assert_eq!(fields.len(), PKG_FIELDS); // checked by caller
+    assert!(
+        fields.len() == PKG_FIELDS || fields.len() == PKG_FIELDS_WITH_LONG_SIZE,
+        "checked by caller"
+    );
     let name = fields[0];
+    let has_long_size = fields.len() == PKG_FIELDS_WITH_LONG_SIZE;
+    let size_offset = usize::from(has_long_size);
     let epoch = match parse_optional(fields[3]) {
         None => None,
         Some(s) => Some(
@@ -135,18 +144,17 @@ fn parse_pkg_header(fields: &[&str]) -> Result<Package> {
     let arch = parse_optional(fields[4])
         .ok_or_else(|| anyhow::anyhow!("{name}: missing arch"))?
         .to_string();
-    let size = fields[6]
-        .parse::<u64>()
+    let size = parse_size(fields[6], has_long_size.then(|| fields[7]))
         .with_context(|| format!("{name}: invalid size"))?;
-    let buildtime = fields[7]
+    let buildtime = fields[7 + size_offset]
         .parse::<u64>()
         .with_context(|| format!("{name}: invalid buildtime"))?;
-    let installtime = fields[8]
+    let installtime = fields[8 + size_offset]
         .parse::<u64>()
         .with_context(|| format!("{name}: invalid installtime"))?;
-    let sourcerpm = parse_optional(fields[9]).map(|s| s.to_string());
+    let sourcerpm = parse_optional(fields[9 + size_offset]).map(|s| s.to_string());
 
-    let digest_algo = match parse_optional(fields[10]) {
+    let digest_algo = match parse_optional(fields[10 + size_offset]) {
         None => None,
         Some(s) => {
             let v = s
@@ -181,6 +189,19 @@ fn parse_optional(s: &str) -> Option<&str> {
     if s == "(none)" { None } else { Some(s) }
 }
 
+/// Use the legacy size tag when present, falling back to RPM's 64-bit tag.
+fn parse_size(legacy: &str, long: Option<&str>) -> Result<u64> {
+    parse_optional(legacy)
+        .filter(|size| !size.is_empty())
+        .or_else(|| {
+            long.and_then(parse_optional)
+                .filter(|size| !size.is_empty())
+        })
+        .ok_or_else(|| anyhow::anyhow!("missing size tag"))?
+        .parse::<u64>()
+        .context("parsing size tag")
+}
+
 impl TryFrom<u32> for DigestAlgorithm {
     type Error = ();
 
@@ -205,29 +226,33 @@ impl TryFrom<u32> for DigestAlgorithm {
 
 /// Parse a @@FILE@@ line and return the path and file info.
 fn parse_file_line(fields: &[&str]) -> Result<(Utf8PathBuf, FileInfo)> {
-    assert_eq!(fields.len(), FILE_FIELDS); // checked by caller
+    assert!(
+        fields.len() == FILE_FIELDS || fields.len() == FILE_FIELDS_WITH_LONG_SIZE,
+        "checked by caller"
+    );
     let path = Utf8Path::new(fields[0]);
-    let size = fields[1]
-        .parse::<u64>()
+    let has_long_size = fields.len() == FILE_FIELDS_WITH_LONG_SIZE;
+    let size_offset = usize::from(has_long_size);
+    let size = parse_size(fields[1], has_long_size.then(|| fields[2]))
         .with_context(|| format!("invalid filesize for {path}"))?;
-    let mode = fields[2]
+    let mode = fields[2 + size_offset]
         .parse::<u16>()
         .with_context(|| format!("invalid filemode for {path}"))?;
-    let mtime = fields[3]
+    let mtime = fields[3 + size_offset]
         .parse::<u64>()
         .with_context(|| format!("invalid filemtime for {path}"))?;
-    let digest = if fields[4].is_empty() {
+    let digest = if fields[4 + size_offset].is_empty() {
         None
     } else {
-        Some(fields[4].to_string())
+        Some(fields[4 + size_offset].to_string())
     };
-    let flags = fields[5]
+    let flags = fields[5 + size_offset]
         .parse::<u32>()
         .with_context(|| format!("invalid fileflags for {path}"))?;
-    let linkto = if fields[8].is_empty() {
+    let linkto = if fields[8 + size_offset].is_empty() {
         None
     } else {
-        Some(Utf8PathBuf::from(fields[8]))
+        Some(Utf8PathBuf::from(fields[8 + size_offset]))
     };
 
     let info = FileInfo {
@@ -236,8 +261,8 @@ fn parse_file_line(fields: &[&str]) -> Result<(Utf8PathBuf, FileInfo)> {
         mtime,
         digest,
         flags: FileFlags::from_raw(flags),
-        user: fields[6].to_string(),
-        group: fields[7].to_string(),
+        user: fields[6 + size_offset].to_string(),
+        group: fields[7 + size_offset].to_string(),
         linkto,
     };
 
@@ -254,8 +279,20 @@ mod tests {
         )
     }
 
+    fn make_pkg_line_with_long_size(name: &str, legacy_size: &str, long_size: &str) -> String {
+        format!(
+            "@@PKG@@\t{name}\t1.0\t1.fc42\t(none)\tx86_64\tMIT\t{legacy_size}\t{long_size}\t1000\t2000\tfoo.src.rpm\t8\n"
+        )
+    }
+
     fn make_file_line(path: &str) -> String {
         format!("@@FILE@@\t{path}\t100\t33188\t1000\taabbccdd\t0\troot\troot\t\n")
+    }
+
+    fn make_file_line_with_long_size(path: &str, legacy_size: &str, long_size: &str) -> String {
+        format!(
+            "@@FILE@@\t{path}\t{legacy_size}\t{long_size}\t33188\t1000\taabbccdd\t0\troot\troot\t\n"
+        )
     }
 
     #[test]
@@ -281,6 +318,43 @@ mod tests {
         assert_eq!(packages["test"].digest_algo, None);
         assert!(packages["test"].files.is_empty());
         assert!(packages["test"].changelog_times.is_empty());
+    }
+
+    #[test]
+    fn test_package_size_falls_back_to_long_size() {
+        let input = make_pkg_line_with_long_size("test", "(none)", "12345");
+        let packages = load_from_str_impl(&input).unwrap();
+
+        assert_eq!(packages["test"].size, 12345);
+    }
+
+    #[test]
+    fn test_file_size_falls_back_to_long_file_size() {
+        let mut input = make_pkg_line("test");
+        input.push_str(&make_file_line_with_long_size(
+            "/usr/bin/test",
+            "(none)",
+            "12345",
+        ));
+        let packages = load_from_str_impl(&input).unwrap();
+
+        assert_eq!(
+            packages["test"].files[Utf8Path::new("/usr/bin/test")].size,
+            12345
+        );
+    }
+
+    #[test]
+    fn test_legacy_sizes_take_precedence_over_long_sizes() {
+        let mut input = make_pkg_line_with_long_size("test", "100", "200");
+        input.push_str(&make_file_line_with_long_size("/usr/bin/test", "30", "40"));
+        let packages = load_from_str_impl(&input).unwrap();
+
+        assert_eq!(packages["test"].size, 100);
+        assert_eq!(
+            packages["test"].files[Utf8Path::new("/usr/bin/test")].size,
+            30
+        );
     }
 
     #[test]
